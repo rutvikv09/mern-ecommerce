@@ -1,0 +1,441 @@
+
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation template to create a VPC, subnets, EC2 instances, NAT Gateway, and DocumentDB with separate private subnets.
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: rutvik
+
+  LatestAmazonLinuxAMI:
+    Description: Latest Amazon Linux 2 AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+  
+  CloudWatchConfig:
+    Type: String
+    Default: |
+      {
+        "metrics": {
+          "namespace": "BackendMetrics",
+          "metrics_collected": {
+            "disk": {
+              "measurement": [
+                "used_percent"
+              ],
+              "metrics_collection_interval": 60
+            },
+            "mem": {
+              "measurement": [
+                "mem_used_percent"
+              ],
+              "metrics_collection_interval": 60
+            }
+          }
+        },
+        "logs": {
+          "logs_collected": {
+            "files": {
+              "collect_list": [
+                {
+                  "file_path": "/var/log/messages",
+                  "log_group_name": "EC2InstanceLogGroup",
+                  "log_stream_name": "{instance_id}-messages",
+                  "timezone": "UTC"
+                }
+              ]
+            }
+          }
+        }
+      }
+
+Resources:
+  # VPC
+  MyVPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: "Name"
+          Value: "MyVPC"
+
+  # Public Subnets
+  PublicSubnet:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.1.0/24"
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: "Name"
+          Value: "PublicSubnet"
+
+  PublicSubnet2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.5.0/24"
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      Tags:
+        - Key: "Name"
+          Value: "PublicSubnet2"
+
+  # Private Subnets
+  PrivateSubnetBackend:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.2.0/24"
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: "Name"
+          Value: "PrivateSubnetBackend"
+ # Private Subnets
+  PrivateSubnetBackend2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.6.0/24"
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      Tags:
+        - Key: "Name"
+          Value: "PrivateSubnetBackend"
+
+  PrivateSubnetDocumentDB1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.3.0/24"
+      AvailabilityZone: !Select [1, !GetAZs "us-east-1"]
+      Tags:
+        - Key: "Name"
+          Value: "PrivateSubnetDocumentDB1"
+
+  PrivateSubnetDocumentDB2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.4.0/24"
+      AvailabilityZone: !Select [2, !GetAZs "us-east-1"]
+      Tags:
+        - Key: "Name"
+          Value: "PrivateSubnetDocumentDB2"
+
+  # Internet Gateway
+  MyInternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: "Name"
+          Value: "MyInternetGateway"
+
+  AttachGateway:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  # Public Route Table
+  PublicRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: "Name"
+          Value: "PublicRouteTable"
+
+  PublicRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref MyInternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # NAT Gateway
+  EIPForNAT:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: "vpc"
+
+  NATGateway:
+    Type: "AWS::EC2::NatGateway"
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      AllocationId: !GetAtt EIPForNAT.AllocationId
+
+  PrivateRouteTableBackend:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: "Name"
+          Value: "PrivateRouteTableBackend"
+
+  PrivateRouteBackend:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableBackend
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnetBackendRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PrivateSubnetBackend
+      RouteTableId: !Ref PrivateRouteTableBackend
+
+  PrivateSubnet2BackendRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PrivateSubnetBackend2
+      RouteTableId: !Ref PrivateRouteTableBackend
+
+  # Security Groups
+  PublicSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow HTTP and SSH traffic for frontend"
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: "tcp"
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: "tcp"
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: "Environment"
+          Value: "Production"
+        - Key: "Name"
+          Value: "PublicSecurityGroup"
+
+  BackendSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow backend communication"
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: "tcp"
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref BackendLoadBalanceSG
+        - IpProtocol: "tcp"
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "0.0.0.0/0"  # This allows SSH from any IP, you can restrict this to specific IP ranges
+      Tags:
+        - Key: "Environment"
+          Value: "Production"
+        - Key: "Name"
+          Value: "BackendSecurityGroup"
+
+  DocumentDBSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow access to DocumentDB"
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: "tcp"
+          FromPort: 27017
+          ToPort: 27017
+          SourceSecurityGroupId: !Ref BackendSecurityGroup
+      Tags:
+        - Key: "Environment"
+          Value: "Production"
+        - Key: "Name"
+          Value: "DocumentDBSecurityGroup"
+
+  BackendLoadBalanceSG:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Security group for Backend Load Balancer
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: "Environment"
+          Value: "Production"
+        - Key: "Name"
+          Value: "BackendLoadBalanceSG"
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Protocol: HTTP
+      Port: 3000
+      VpcId: !Ref MyVPC
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: 3000
+      HealthCheckPath: "/"
+
+  BackendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref BackendLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  BackendLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref BackendLoadBalanceSG
+
+
+  # EC2 Instances
+  FrontendEC2Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      InstanceType: "t2.micro"
+      SecurityGroupIds:
+        - !Ref PublicSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      ImageId: !Ref LatestAmazonLinuxAMI
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: "Name"
+          Value: "FrontendEC2Instance"
+      UserData:
+       Fn::Base64:
+         !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install -y docker
+            sudo service docker start
+            sudo usermod -a -G docker ec2-user
+
+  BackendEC2InstanceLaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: BackendEC2InstanceLaunchTemplate
+      LaunchTemplateData:
+        InstanceType: "t2.micro"
+        SecurityGroupIds:
+          - !Ref BackendSecurityGroup
+        ImageId: !Ref LatestAmazonLinuxAMI
+        KeyName: !Ref KeyName
+        UserData:
+          Fn::Base64:
+            !Sub |
+                #!/bin/bash
+                sudo yum update -y
+                sudo yum install -y docker
+                sudo yum install -y amazon-cloudwatch-agent
+                cat <<EOF > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+                ${CloudWatchConfig}
+                EOF
+                /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+                sudo usermod -a -G docker ec2-user
+                sudo service docker start
+                sudo docker pull rutvikvaghani/backend-ecommerce:latest
+                sudo docker run -d -p 3000:3000 --name backend-ecommerce rutvikvaghani/backend-ecommerce:latest
+
+
+
+  # Backend Auto Scaling Group
+  BackendAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetBackend
+        - !Ref PrivateSubnetBackend2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref BackendEC2InstanceLaunchTemplate
+        Version: !GetAtt BackendEC2InstanceLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 1
+      Tags:
+        - Key: Name
+          Value: BackendInstance
+          PropagateAtLaunch: true
+      TargetGroupARNs:
+        - !Ref BackendTargetGroup
+
+  # S3 Bucket Configuration
+  S3Bucket00splitappreact00jIv1z:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: "index.html"
+        ErrorDocument: "index.html"
+      PublicAccessBlockConfiguration:
+        RestrictPublicBuckets: false
+        IgnorePublicAcls: false
+        BlockPublicPolicy: false
+        BlockPublicAcls: false
+      BucketName: "mongoecommerce1"
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: "BucketOwnerEnforced"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: "AES256"
+    UpdateReplacePolicy: "Retain"
+
+  # S3 Bucket Policy Configuration
+  S3BucketPolicy00splitappreact0000fvS:
+    Type: "AWS::S3::BucketPolicy"
+    DeletionPolicy: "Retain"
+    Properties:
+      Bucket:
+        Ref: "S3Bucket00splitappreact00jIv1z"  # Reference to the S3 bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Resource: "arn:aws:s3:::mongoecommerce1/*"  
+            Action: "s3:GetObject"
+            Effect: "Allow"
+            Principal: "*"
+            Sid: "PublicReadGetObject"
+    
+  # Create a Secret in Secrets Manager
+  DocumentDBCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: DocumentDBKeys
+      Description: "Secrets for DocumentDB username and password"
+      SecretString: !Sub |
+        {
+          "username": ,
+          "password": ",
+          "AWS_ACCESS_KEY_ID":
+          "aws_secret_access_key":
+        }
+
+Outputs:
+  KeyNameOutput:
+    Value: !Ref KeyName
+  
