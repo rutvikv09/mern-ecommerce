@@ -10,7 +10,8 @@ An advanced **ecommerce platform** built with the MERN stack, leveraging third-p
 --
 ## ✨ Arcitecture Diagram
 
-![alt text](c:/Users/vagha/Downloads/r/SVG2.drawio.svg)
+![400959370-b9a4ea71-d4a4-477f-8bec-078e4194b23c (1)](https://github.com/user-attachments/assets/614a0623-5acb-4759-80d7-7b88e7c0daf9)
+
 
 
 ---
